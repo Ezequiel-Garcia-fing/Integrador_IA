@@ -9,10 +9,11 @@ import speech_recognition as sr
 import cv2
 import csv
 from collections import defaultdict
+from mpl_toolkits.mplot3d import Axes3D  # Importar para visualizar gráficos en 3D
 
 # ----------------------------- FUNCIONES AUXILIARES -----------------------------
 
-def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029):
+def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029, usar_primer_segmento=False):
     audio_data, sample_rate = librosa.load(archivo_audio)
     
     # Recortar silencios
@@ -34,13 +35,17 @@ def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029):
     # Si no hay segmentos válidos, advertir y devolver un vector de ceros del tamaño adecuado
     if not segmentos_filtrados:
         print(f"Advertencia: archivo {archivo_audio} no tiene segmentos con suficiente amplitud.")
-        return np.zeros(7 + 12 + 7 + 1)  # Ajustar tamaño según la cantidad de características
+        return np.zeros(5 + 12 + 7 + 1)  # Ajustar tamaño según la cantidad de características
     
-    # Extraer características de cada segmento válido y calcular la media y desviación estándar
+    # Si se solicita usar solo el primer segmento válido
+    if usar_primer_segmento:
+        segmentos_filtrados = [segmentos_filtrados[0]]  # Usar solo el primer segmento
+    
+    # Extraer características de cada segmento válido y calcular la media
     mfccs_mean, chroma_mean, spectral_contrast_mean, zcr_mean = [], [], [], []
     for seg in segmentos_filtrados:
         # MFCC
-        mfccs = librosa.feature.mfcc(y=seg, sr=sample_rate, n_mfcc=7)
+        mfccs = librosa.feature.mfcc(y=seg, sr=sample_rate, n_mfcc=5)
         mfccs_mean.append(np.mean(mfccs, axis=1))
         
         # Chroma
@@ -55,7 +60,7 @@ def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029):
         zcr = librosa.feature.zero_crossing_rate(y=seg)
         zcr_mean.append(np.mean(zcr))
     
-    # Tomar la media y desviación estándar de las características en los segmentos válidos
+    # Tomar la media de las características en los segmentos válidos (o el único en este caso)
     mfccs_mean = np.mean(mfccs_mean, axis=0)
     chroma_mean = np.mean(chroma_mean, axis=0)
     spectral_contrast_mean = np.mean(spectral_contrast_mean, axis=0)
