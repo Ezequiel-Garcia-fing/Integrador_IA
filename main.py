@@ -12,33 +12,61 @@ from collections import defaultdict
 
 # ----------------------------- FUNCIONES AUXILIARES -----------------------------
 
-# Extraer múltiples características de una muestra de voz (MFCC, Chroma, Spectral Contrast, ZCR)
-def extraer_caracteristicas_completas(archivo_audio):
+def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029):
     audio_data, sample_rate = librosa.load(archivo_audio)
     
     # Recortar silencios
     audio_data, _ = librosa.effects.trim(audio_data)
 
-    # MFCC
-    mfccs = librosa.feature.mfcc(y=audio_data, sr=sample_rate, n_mfcc=7)
-    mfccs_mean = np.mean(mfccs.T, axis=0)
+    # Dividir el audio en 10 segmentos
+    num_segmentos = 10
+    duracion_segmento = len(audio_data) // num_segmentos
+    segmentos = [
+        audio_data[i * duracion_segmento: (i + 1) * duracion_segmento]
+        for i in range(num_segmentos)
+    ]
     
-    # Chroma (Croma del espectrograma)
-    chroma = librosa.feature.chroma_stft(y=audio_data, sr=sample_rate)
-    chroma_mean = np.mean(chroma.T, axis=0)
+    # Filtrar segmentos con amplitud baja
+    segmentos_filtrados = [
+        seg for seg in segmentos if np.mean(np.abs(seg)) > umbral_amplitud
+    ]
     
-    # Spectral Contrast (Contraste espectral)
-    spectral_contrast = librosa.feature.spectral_contrast(y=audio_data, sr=sample_rate)
-    spectral_contrast_mean = np.mean(spectral_contrast.T, axis=0)
+    # Si no hay segmentos válidos, advertir y devolver un vector de ceros del tamaño adecuado
+    if not segmentos_filtrados:
+        print(f"Advertencia: archivo {archivo_audio} no tiene segmentos con suficiente amplitud.")
+        return np.zeros(7 + 12 + 7 + 1)  # Ajustar tamaño según la cantidad de características
     
-    # ZCR (Tasa de cruces por cero)
-    zcr = librosa.feature.zero_crossing_rate(y=audio_data)
-    zcr_mean = np.mean(zcr)
+    # Extraer características de cada segmento válido y calcular la media y desviación estándar
+    mfccs_mean, chroma_mean, spectral_contrast_mean, zcr_mean = [], [], [], []
+    for seg in segmentos_filtrados:
+        # MFCC
+        mfccs = librosa.feature.mfcc(y=seg, sr=sample_rate, n_mfcc=7)
+        mfccs_mean.append(np.mean(mfccs, axis=1))
+        
+        # Chroma
+        chroma = librosa.feature.chroma_stft(y=seg, sr=sample_rate)
+        chroma_mean.append(np.mean(chroma, axis=1))
+        
+        # Spectral Contrast
+        spectral_contrast = librosa.feature.spectral_contrast(y=seg, sr=sample_rate)
+        spectral_contrast_mean.append(np.mean(spectral_contrast, axis=1))
+        
+        # ZCR
+        zcr = librosa.feature.zero_crossing_rate(y=seg)
+        zcr_mean.append(np.mean(zcr))
     
-    # Concatenar todas las características
+    # Tomar la media y desviación estándar de las características en los segmentos válidos
+    mfccs_mean = np.mean(mfccs_mean, axis=0)
+    chroma_mean = np.mean(chroma_mean, axis=0)
+    spectral_contrast_mean = np.mean(spectral_contrast_mean, axis=0)
+    zcr_mean = np.mean(zcr_mean)
+    
+    # Concatenar todas las características en un solo vector
     caracteristicas = np.hstack([mfccs_mean, chroma_mean, spectral_contrast_mean, zcr_mean])
     
     return caracteristicas
+
+
 
 # Cargar base de datos de voz y extraer características
 def cargar_base_datos_voz_completa():
@@ -147,19 +175,20 @@ def visualizar_datos(base_datos_voz, etiquetas_voz):
     etiquetas_unicas = list(set(etiquetas_voz))  # Obtener etiquetas únicas
     etiquetas_numericas = [etiquetas_unicas.index(label) for label in etiquetas_voz]
 
-    # Visualizar en 2D o 1D según n_componentes
-    if n_componentes == 2:
-        plt.scatter(reduccion[:, 0], reduccion[:, 1], c=etiquetas_numericas, cmap='viridis')
-        plt.xlabel('Componente principal 1')
-        plt.ylabel('Componente principal 2')
-    else:
-        plt.scatter(reduccion[:, 0], np.zeros_like(reduccion[:, 0]), c=etiquetas_numericas, cmap='viridis')
-        plt.xlabel('Componente principal 1')
+    # Crear un gráfico con cada verdura en un color distinto
+    plt.figure(figsize=(10, 7))
+    colores = plt.cm.viridis(np.linspace(0, 1, len(etiquetas_unicas)))
+    for i, etiqueta in enumerate(etiquetas_unicas):
+        indices = [j for j, e in enumerate(etiquetas_voz) if e == etiqueta]
+        plt.scatter(reduccion[indices, 0], reduccion[indices, 1], color=colores[i], label=etiqueta)
 
+    # Configurar el gráfico
+    plt.xlabel('Componente principal 1')
+    plt.ylabel('Componente principal 2')
     plt.title('Visualización PCA de las características de voz')
-    plt.colorbar(ticks=range(len(etiquetas_unicas)), label='Clase de verdura')
-    plt.clim(-0.5, len(etiquetas_unicas) - 0.5)
+    plt.legend(title="Clase de verdura")
     plt.show()
+
 
 # Guardar características de audio en CSV y calcular medias
 def guardar_caracteristicas_y_medias_en_csv():
