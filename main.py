@@ -16,74 +16,56 @@ from mpl_toolkits.mplot3d import Axes3D  # Importar para visualizar gráficos en
 # Nueva función para segmentar el audio
 def segmentar_audio(archivo_audio, num_segmentos=10):
     audio_data, sample_rate = librosa.load(archivo_audio)
-    
-    # Recortar silencios
     audio_data, _ = librosa.effects.trim(audio_data)
-    
-    # Ajustar el tamaño del audio para que sea múltiplo del número de segmentos
     duracion_segmento = len(audio_data) // num_segmentos
     audio_data = librosa.util.fix_length(audio_data, size=num_segmentos * duracion_segmento)
-    
-    # Dividir el audio en segmentos
-    segmentos = [
-        audio_data[i * duracion_segmento: (i + 1) * duracion_segmento]
-        for i in range(num_segmentos)
-    ]
+    segmentos = [audio_data[i * duracion_segmento: (i + 1) * duracion_segmento] for i in range(num_segmentos)]
     return segmentos, sample_rate
 
-# Modificación de extraer_caracteristicas_completas para usar segmentar_audio
-def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029, usar_primer_segmento=False):
+
+# Modificación de extraer_caracteristicas_completas para usar solo el segmento 9 en ciertas palabras
+# Modificación de extraer_caracteristicas_completas para usar segmentos 6, 7 y 9 en ciertas palabras
+def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.030):
+    palabra = os.path.basename(archivo_audio).split('_')[0]
     segmentos, sample_rate = segmentar_audio(archivo_audio)
 
-    # Filtrar segmentos con amplitud baja
     segmentos_filtrados = [
         seg for seg in segmentos if np.mean(np.abs(seg)) > umbral_amplitud
     ]
-    
-    # Si no hay segmentos válidos, advertir y devolver un vector de ceros del tamaño adecuado
+
+    if palabra in ["choclo", "zanahoria"]:
+        if len(segmentos) > 8:
+            segmentos_filtrados = [segmentos[5], segmentos[6], segmentos[8]]
+
     if not segmentos_filtrados:
         print(f"Advertencia: archivo {archivo_audio} no tiene segmentos con suficiente amplitud.")
-        return np.zeros(5 + 12 + 7 + 1)  # Ajustar tamaño según la cantidad de características
-    
-    # Si se solicita usar solo el primer segmento válido
-    if usar_primer_segmento:
-        segmentos_filtrados = [segmentos_filtrados[0]]  # Usar solo el primer segmento
-    
-    # Extraer características de cada segmento válido y calcular la media
-    mfccs_mean, chroma_mean, spectral_contrast_mean, zcr_mean = [], [], [], []
+        return np.zeros(5 + 1 + 1)  # Tamaño ajustado sin Spectral Contrast
+
+    mfccs_mean, zcr_mean, rms_mean = [], [], []
     for seg in segmentos_filtrados:
-        # MFCC
         mfccs = librosa.feature.mfcc(y=seg, sr=sample_rate, n_mfcc=5)
         mfccs_mean.append(np.mean(mfccs, axis=1))
-        
-        # Chroma
-        chroma = librosa.feature.chroma_stft(y=seg, sr=sample_rate)
-        chroma_mean.append(np.mean(chroma, axis=1))
-        
-        # Spectral Contrast
-        spectral_contrast = librosa.feature.spectral_contrast(y=seg, sr=sample_rate)
-        spectral_contrast_mean.append(np.mean(spectral_contrast, axis=1))
-        
-        # ZCR
         zcr = librosa.feature.zero_crossing_rate(y=seg)
         zcr_mean.append(np.mean(zcr))
-    
-    # Tomar la media de las características en los segmentos válidos
+        rms = librosa.feature.rms(y=seg)
+        rms_mean.append(np.mean(rms))
+
     mfccs_mean = np.mean(mfccs_mean, axis=0)
-    chroma_mean = np.mean(chroma_mean, axis=0)
-    spectral_contrast_mean = np.mean(spectral_contrast_mean, axis=0)
     zcr_mean = np.mean(zcr_mean)
-    
-    # Concatenar todas las características en un solo vector
-    caracteristicas = np.hstack([mfccs_mean, chroma_mean, spectral_contrast_mean, zcr_mean])
-    
+    rms_mean = np.mean(rms_mean)
+
+    caracteristicas = np.hstack([mfccs_mean, zcr_mean, rms_mean])
+
     return caracteristicas
+
+
 
 # Modificación de graficar_onda_segmentada_promedio para usar segmentar_audio
 def graficar_onda_segmentada_promedio(ruta_voz, palabras, num_segmentos=10):
+    # Diccionario para almacenar las ondas promedio de cada segmento por palabra
     segmentos_promedio = {palabra: np.zeros((num_segmentos, 1)) for palabra in palabras}
     
-    # Determinar la longitud mínima de los segmentos
+    # Determinar la longitud mínima de los segmentos entre todos los archivos de cada palabra
     min_segment_length = None
     for palabra in palabras:
         for archivo in os.listdir(ruta_voz):
@@ -133,6 +115,7 @@ def graficar_onda_segmentada_promedio(ruta_voz, palabras, num_segmentos=10):
 
     plt.tight_layout()
     plt.show()
+
 
 
 
@@ -257,45 +240,42 @@ def visualizar_datos(base_datos_voz, etiquetas_voz):
     plt.legend(title="Clase de verdura")
     plt.show()
 
+def calcular_y_guardar_promedios_caracteristicas(ruta_voz, palabras, num_segmentos=10, archivo_csv='promedios_caracteristicas.csv'):
+    promedios_por_clase = {palabra: {f"Segmento_{i+1}": {'MFCC': [], 'ZCR': [], 'RMS': []} for i in range(num_segmentos)} for palabra in palabras}
 
-# Guardar características de audio en CSV y calcular medias
-def guardar_caracteristicas_y_medias_en_csv():
-    ruta_voz = 'base_datos_voz/'
-    archivo_csv = 'caracteristicas_audio_con_medias.csv'
-    
-    # Diccionario para almacenar características por verdura
-    caracteristicas_por_verdura = defaultdict(list)
-
-    # Crear y escribir encabezados en el archivo CSV
-    with open(archivo_csv, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        encabezados = ['archivo'] + [f'mfcc_{i}' for i in range(8)] + [f'chroma_{i}' for i in range(12)] + [f'spectral_contrast_{i}' for i in range(7)]
-        writer.writerow(encabezados)
-        
-        # Procesar cada archivo de audio y almacenar características por verdura
+    for palabra in palabras:
         for archivo in os.listdir(ruta_voz):
-            if archivo.endswith('.wav'):
-                verdura = archivo.split('_')[0]  # Etiqueta de verdura basada en el nombre del archivo
-                caracteristicas = extraer_caracteristicas_completas(os.path.join(ruta_voz, archivo))
-                caracteristicas_redondeadas = np.round(caracteristicas, 3)  # Redondear a 3 decimales
-                writer.writerow([archivo] + list(caracteristicas_redondeadas))
-                caracteristicas_por_verdura[verdura].append(caracteristicas)
-    
-    # Calcular medias de características por verdura y guardarlas
-    with open(archivo_csv, mode='a', newline='') as file:
-        writer = csv.writer(file)
+            if archivo.startswith(palabra) and archivo.endswith('.wav'):
+                segmentos, sample_rate = segmentar_audio(os.path.join(ruta_voz, archivo), num_segmentos)
+                
+                for i, segmento in enumerate(segmentos):
+                    mfccs = librosa.feature.mfcc(y=segmento, sr=sample_rate, n_mfcc=5)
+                    zcr = librosa.feature.zero_crossing_rate(y=segmento)
+                    rms = librosa.feature.rms(y=segmento)
+                    
+                    promedios_por_clase[palabra][f"Segmento_{i+1}"]['MFCC'].append(np.mean(mfccs, axis=1))
+                    promedios_por_clase[palabra][f"Segmento_{i+1}"]['ZCR'].append(np.mean(zcr))
+                    promedios_por_clase[palabra][f"Segmento_{i+1}"]['RMS'].append(np.mean(rms))
+
+    with open(archivo_csv, mode='w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Clase', 'Segmento', 'MFCC1', 'MFCC2', 'MFCC3', 'MFCC4', 'MFCC5', 'ZCR', 'RMS'])
         
-        for verdura, caracteristicas in caracteristicas_por_verdura.items():
-            media_caracteristicas = np.mean(caracteristicas, axis=0)
-            media_caracteristicas_redondeadas = np.round(media_caracteristicas, 3)  # Redondear a 3 decimales
-            writer.writerow([f'{verdura}_media'] + list(media_caracteristicas_redondeadas))
+        for palabra, segmentos in promedios_por_clase.items():
+            for segmento, caracteristicas in segmentos.items():
+                mfccs_mean = np.mean(caracteristicas['MFCC'], axis=0)
+                zcr_mean = np.mean(caracteristicas['ZCR'])
+                rms_mean = np.mean(caracteristicas['RMS'])
+                
+                writer.writerow([
+                    palabra, segmento, *mfccs_mean, zcr_mean, rms_mean
+                ])
 
-    print(f"Características y medias de audio guardadas en {archivo_csv}")
-
+    print(f"Archivo CSV guardado como '{archivo_csv}'")
 # ------------------------------- PROGRAMA PRINCIPAL ------------------------------
 
 if __name__ == "__main__":
-    # Paso 1: Cargar las bases de datos
+    # Paso 1: Cargar las bases de datos de voz
     print("Cargando bases de datos de voz...")
     base_datos_voz, etiquetas_voz = cargar_base_datos_voz_completa()
 
@@ -303,9 +283,6 @@ if __name__ == "__main__":
     print("Filtrando características con baja desviación estándar en cada clase...")
     base_datos_voz_filtrado = filtrar_caracteristicas_por_clase(base_datos_voz, etiquetas_voz)
 
-    ruta_voz = 'base_datos_voz/'
-    palabras = ['choclo', 'berenjena', 'zanahoria', 'papa']
-    graficar_onda_segmentada_promedio(ruta_voz, palabras)
     # Paso 3: Entrenar el modelo Knn para reconocimiento de voz
     print("Entrenando Knn para reconocimiento de voz...")
     knn = entrenar_knn(base_datos_voz_filtrado, etiquetas_voz)
@@ -314,15 +291,12 @@ if __name__ == "__main__":
     print("Visualizando características de voz con PCA...")
     visualizar_datos(base_datos_voz_filtrado, etiquetas_voz)
 
-    # Paso 4: Capturar audio directamente desde el micrófono
-    # archivo_voz_test = grabar_audio_desde_microfono()  # Graba el audio desde el micrófono
+    # Generar archivo CSV con los promedios de las características
+    ruta_voz = 'base_datos_voz/'
+    palabras = ['choclo', 'berenjena', 'zanahoria', 'papa']
+    print("Calculando y guardando promedios de características en CSV...")
+    calcular_y_guardar_promedios_caracteristicas(ruta_voz, palabras, num_segmentos=10, archivo_csv='promedios_caracteristicas.csv')
 
-    # Paso 5: Reconocer la verdura con el modelo entrenado
-    # verdura_reconocida = reconocer_voz(knn, archivo_voz_test)
-    # print(f"Verdura reconocida por voz: {verdura_reconocida}")
-
-    # Paso 6: Mostrar la imagen correspondiente a la palabra reconocida
-    # mostrar_imagen(verdura_reconocida)
-
-    # Guardar características y medias en el archivo CSV
-    guardar_caracteristicas_y_medias_en_csv()
+    # Graficar los segmentos promedio de cada clase
+    print("Graficando segmentos promedio por clase...")
+    graficar_onda_segmentada_promedio(ruta_voz, palabras, num_segmentos=10)
