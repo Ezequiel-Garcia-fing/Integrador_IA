@@ -10,7 +10,7 @@ import cv2
 import csv
 from collections import defaultdict
 from mpl_toolkits.mplot3d import Axes3D  # Importar para visualizar gráficos en 3D
-
+from scipy.stats import f_oneway
 # ----------------------------- FUNCIONES AUXILIARES -----------------------------
 
 # Nueva función para segmentar el audio
@@ -30,7 +30,7 @@ def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.030):
     segmentos, sample_rate = segmentar_audio(archivo_audio)
 
     segmentos_filtrados = [
-        seg for seg in segmentos if np.mean(np.abs(seg)) > umbral_amplitud
+        seg for seg in segmentos if np.mean(np.abs(seg)) > umbral_amplitud 
     ]
 
     if palabra in ["choclo", "zanahoria"]:
@@ -39,12 +39,13 @@ def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.030):
 
     if not segmentos_filtrados:
         print(f"Advertencia: archivo {archivo_audio} no tiene segmentos con suficiente amplitud.")
-        return np.zeros(5 + 1 + 1)  # Tamaño ajustado sin Spectral Contrast
+        return np.zeros(3 + 1 + 1)  # Tamaño ajustado sin Spectral Contrast
 
     mfccs_mean, zcr_mean, rms_mean = [], [], []
     for seg in segmentos_filtrados:
         mfccs = librosa.feature.mfcc(y=seg, sr=sample_rate, n_mfcc=5)
-        mfccs_mean.append(np.mean(mfccs, axis=1))
+        mfccs_selected = mfccs[[0, 3, 4], :]  # Seleccionar los coeficientes 1, 4 y 5 (índices 0, 3 y 4)
+        mfccs_mean.append(np.mean(mfccs_selected, axis=1))
         zcr = librosa.feature.zero_crossing_rate(y=seg)
         zcr_mean.append(np.mean(zcr))
         rms = librosa.feature.rms(y=seg)
@@ -58,7 +59,67 @@ def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.030):
 
     return caracteristicas
 
+def encontrar_segmentos_caracteristicos(ruta_voz, palabras, num_segmentos=10):
+    varianza_por_segmento = []
 
+    for segmento in range(num_segmentos):
+        caracteristicas_por_clase = []
+
+        for palabra in palabras:
+            caracteristicas_segmento = []
+            for archivo in os.listdir(ruta_voz):
+                if archivo.startswith(palabra) and archivo.endswith('.wav'):
+                    segmentos, sample_rate = segmentar_audio(os.path.join(ruta_voz, archivo), num_segmentos)
+                    mfccs = librosa.feature.mfcc(y=segmentos[segmento], sr=sample_rate, n_mfcc=5)
+                    mfccs_selected = mfccs[[0, 3, 4], :]  # Coeficientes 1, 4 y 5
+                    caracteristicas_segmento.append(np.mean(mfccs_selected, axis=1))
+            caracteristicas_por_clase.append(np.mean(caracteristicas_segmento, axis=0))
+
+        varianza_segmento = np.var(np.array(caracteristicas_por_clase), axis=0).mean()
+        varianza_por_segmento.append((f"Segmento_{segmento + 1}", varianza_segmento))
+
+    # Ordenar segmentos por varianza media entre clases (descendente)
+    varianza_por_segmento.sort(key=lambda x: x[1], reverse=True)
+    return varianza_por_segmento
+
+def identificar_segmentos_caracteristicos_por_caracteristica(ruta_voz, palabras, num_segmentos=10):
+    # Estructura para almacenar las características de cada segmento y palabra
+    caracteristicas_por_segmento = {
+        palabra: {f"Segmento_{i+1}": {'MFCC1': [], 'MFCC4': [], 'MFCC5': [], 'ZCR': [], 'RMS': []}
+                  for i in range(num_segmentos)} for palabra in palabras
+    }
+
+    # Extraer características y organizarlas por palabra y segmento
+    for palabra in palabras:
+        for archivo in os.listdir(ruta_voz):
+            if archivo.startswith(palabra) and archivo.endswith('.wav'):
+                segmentos, sample_rate = segmentar_audio(os.path.join(ruta_voz, archivo), num_segmentos)
+
+                for i, segmento in enumerate(segmentos):
+                    mfccs = librosa.feature.mfcc(y=segmento, sr=sample_rate, n_mfcc=5)
+                    zcr = librosa.feature.zero_crossing_rate(y=segmento)
+                    rms = librosa.feature.rms(y=segmento)
+
+                    # Guardar características en el diccionario por segmento y palabra
+                    caracteristicas_por_segmento[palabra][f"Segmento_{i+1}"]['MFCC1'].append(np.mean(mfccs[0, :]))
+                    caracteristicas_por_segmento[palabra][f"Segmento_{i+1}"]['MFCC4'].append(np.mean(mfccs[3, :]))
+                    caracteristicas_por_segmento[palabra][f"Segmento_{i+1}"]['MFCC5'].append(np.mean(mfccs[4, :]))
+                    caracteristicas_por_segmento[palabra][f"Segmento_{i+1}"]['ZCR'].append(np.mean(zcr))
+                    caracteristicas_por_segmento[palabra][f"Segmento_{i+1}"]['RMS'].append(np.mean(rms))
+
+    # Calcular y mostrar la varianza media de cada característica por segmento
+    print("Identificando los segmentos más característicos por característica para cada palabra...")
+    for i in range(num_segmentos):
+        varianza_media_segmento = {caracteristica: [] for caracteristica in ['MFCC1', 'MFCC4', 'MFCC5', 'ZCR', 'RMS']}
+        for palabra in palabras:
+            for caracteristica, valores in caracteristicas_por_segmento[palabra][f"Segmento_{i+1}"].items():
+                varianza_media_segmento[caracteristica].append(np.var(valores))
+
+        # Calcular y mostrar la varianza media de cada característica en el segmento
+        print(f"\nSegmento_{i+1}:")
+        for caracteristica, varianzas in varianza_media_segmento.items():
+            varianza_media = np.mean(varianzas)
+            print(f"{caracteristica}: varianza media = {varianza_media:.4f}")
 
 # Modificación de graficar_onda_segmentada_promedio para usar segmentar_audio
 def graficar_onda_segmentada_promedio(ruta_voz, palabras, num_segmentos=10):
@@ -240,6 +301,36 @@ def visualizar_datos(base_datos_voz, etiquetas_voz):
     plt.legend(title="Clase de verdura")
     plt.show()
 
+def seleccionar_caracteristicas_por_fscore(base_datos_voz, etiquetas_voz, top_n=5):
+    # Obtener la lista de clases únicas en etiquetas_voz
+    clases = np.unique(etiquetas_voz)
+    
+    # Crear un diccionario para almacenar las características por clase
+    caracteristicas_por_clase = {clase: base_datos_voz[etiquetas_voz == clase] for clase in clases}
+    
+    # Calcular el F-score para cada característica
+    f_scores = []
+    for i in range(base_datos_voz.shape[1]):
+        # Crear una lista con las características de cada clase en la posición 'i'
+        datos_por_clase = [caracteristicas_por_clase[clase][:, i] for clase in clases]
+        
+        # Calcular el F-score usando ANOVA de una vía (f_oneway)
+        f_score, _ = f_oneway(*datos_por_clase)
+        f_scores.append(f_score)
+    
+    # Ordenar índices de características según el F-score, en orden descendente
+    indices_top = np.argsort(f_scores)[-top_n:][::-1]
+    f_scores_top = [f_scores[i] for i in indices_top]
+    
+    print("Características seleccionadas con F-scores:")
+    for idx, f_score in zip(indices_top, f_scores_top):
+        print(f"Característica {idx} - F-score: {f_score}")
+    
+    # Seleccionar solo las características con los F-scores más altos
+    base_datos_voz_filtrado = base_datos_voz[:, indices_top]
+    
+    return base_datos_voz_filtrado, indices_top
+
 def calcular_y_guardar_promedios_caracteristicas(ruta_voz, palabras, num_segmentos=10, archivo_csv='promedios_caracteristicas.csv'):
     promedios_por_clase = {palabra: {f"Segmento_{i+1}": {'MFCC': [], 'ZCR': [], 'RMS': []} for i in range(num_segmentos)} for palabra in palabras}
 
@@ -250,16 +341,17 @@ def calcular_y_guardar_promedios_caracteristicas(ruta_voz, palabras, num_segment
                 
                 for i, segmento in enumerate(segmentos):
                     mfccs = librosa.feature.mfcc(y=segmento, sr=sample_rate, n_mfcc=5)
+                    mfccs_selected = mfccs[[0, 3, 4], :]  # Seleccionar los coeficientes 1, 4 y 5
                     zcr = librosa.feature.zero_crossing_rate(y=segmento)
                     rms = librosa.feature.rms(y=segmento)
                     
-                    promedios_por_clase[palabra][f"Segmento_{i+1}"]['MFCC'].append(np.mean(mfccs, axis=1))
+                    promedios_por_clase[palabra][f"Segmento_{i+1}"]['MFCC'].append(np.mean(mfccs_selected, axis=1))
                     promedios_por_clase[palabra][f"Segmento_{i+1}"]['ZCR'].append(np.mean(zcr))
                     promedios_por_clase[palabra][f"Segmento_{i+1}"]['RMS'].append(np.mean(rms))
 
     with open(archivo_csv, mode='w', newline='') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(['Clase', 'Segmento', 'MFCC1', 'MFCC2', 'MFCC3', 'MFCC4', 'MFCC5', 'ZCR', 'RMS'])
+        writer.writerow(['Clase', 'Segmento', 'MFCC1', 'MFCC4', 'MFCC5', 'ZCR', 'RMS'])
         
         for palabra, segmentos in promedios_por_clase.items():
             for segmento, caracteristicas in segmentos.items():
@@ -272,6 +364,9 @@ def calcular_y_guardar_promedios_caracteristicas(ruta_voz, palabras, num_segment
                 ])
 
     print(f"Archivo CSV guardado como '{archivo_csv}'")
+
+
+
 # ------------------------------- PROGRAMA PRINCIPAL ------------------------------
 
 if __name__ == "__main__":
@@ -279,6 +374,8 @@ if __name__ == "__main__":
     print("Cargando bases de datos de voz...")
     base_datos_voz, etiquetas_voz = cargar_base_datos_voz_completa()
 
+    base_datos_voz, etiquetas_voz = cargar_base_datos_voz_completa()
+    base_datos_voz_filtrado, indices_top = seleccionar_caracteristicas_por_fscore(base_datos_voz, etiquetas_voz, top_n=5)
     # Paso 2: Filtrar características por clase
     print("Filtrando características con baja desviación estándar en cada clase...")
     base_datos_voz_filtrado = filtrar_caracteristicas_por_clase(base_datos_voz, etiquetas_voz)
@@ -300,3 +397,11 @@ if __name__ == "__main__":
     # Graficar los segmentos promedio de cada clase
     print("Graficando segmentos promedio por clase...")
     graficar_onda_segmentada_promedio(ruta_voz, palabras, num_segmentos=10)
+
+    # Encontrar los segmentos más característicos de cada palabra
+    print("Identificando los segmentos más característicos para cada palabra...")
+    segmentos_caracteristicos = encontrar_segmentos_caracteristicos(ruta_voz, palabras, num_segmentos=10)
+    for segmento, varianza in segmentos_caracteristicos:
+        print(f"{segmento}: varianza media = {varianza}")
+
+    identificar_segmentos_caracteristicos_por_caracteristica(ruta_voz, palabras, num_segmentos=10)
