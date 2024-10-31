@@ -13,20 +13,28 @@ from mpl_toolkits.mplot3d import Axes3D  # Importar para visualizar gráficos en
 
 # ----------------------------- FUNCIONES AUXILIARES -----------------------------
 
-def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029, usar_primer_segmento=False):
+# Nueva función para segmentar el audio
+def segmentar_audio(archivo_audio, num_segmentos=10):
     audio_data, sample_rate = librosa.load(archivo_audio)
     
     # Recortar silencios
     audio_data, _ = librosa.effects.trim(audio_data)
-
-    # Dividir el audio en 10 segmentos
-    num_segmentos = 10
+    
+    # Ajustar el tamaño del audio para que sea múltiplo del número de segmentos
     duracion_segmento = len(audio_data) // num_segmentos
+    audio_data = librosa.util.fix_length(audio_data, size=num_segmentos * duracion_segmento)
+    
+    # Dividir el audio en segmentos
     segmentos = [
         audio_data[i * duracion_segmento: (i + 1) * duracion_segmento]
         for i in range(num_segmentos)
     ]
-    
+    return segmentos, sample_rate
+
+# Modificación de extraer_caracteristicas_completas para usar segmentar_audio
+def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029, usar_primer_segmento=False):
+    segmentos, sample_rate = segmentar_audio(archivo_audio)
+
     # Filtrar segmentos con amplitud baja
     segmentos_filtrados = [
         seg for seg in segmentos if np.mean(np.abs(seg)) > umbral_amplitud
@@ -60,7 +68,7 @@ def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029, usar
         zcr = librosa.feature.zero_crossing_rate(y=seg)
         zcr_mean.append(np.mean(zcr))
     
-    # Tomar la media de las características en los segmentos válidos (o el único en este caso)
+    # Tomar la media de las características en los segmentos válidos
     mfccs_mean = np.mean(mfccs_mean, axis=0)
     chroma_mean = np.mean(chroma_mean, axis=0)
     spectral_contrast_mean = np.mean(spectral_contrast_mean, axis=0)
@@ -70,6 +78,61 @@ def extraer_caracteristicas_completas(archivo_audio, umbral_amplitud=0.029, usar
     caracteristicas = np.hstack([mfccs_mean, chroma_mean, spectral_contrast_mean, zcr_mean])
     
     return caracteristicas
+
+# Modificación de graficar_onda_segmentada_promedio para usar segmentar_audio
+def graficar_onda_segmentada_promedio(ruta_voz, palabras, num_segmentos=10):
+    segmentos_promedio = {palabra: np.zeros((num_segmentos, 1)) for palabra in palabras}
+    
+    # Determinar la longitud mínima de los segmentos
+    min_segment_length = None
+    for palabra in palabras:
+        for archivo in os.listdir(ruta_voz):
+            if archivo.startswith(palabra) and archivo.endswith('.wav'):
+                segmentos, _ = segmentar_audio(os.path.join(ruta_voz, archivo), num_segmentos)
+                duracion_segmento = len(segmentos[0])
+                if min_segment_length is None or duracion_segmento < min_segment_length:
+                    min_segment_length = duracion_segmento
+
+    for palabra in palabras:
+        sum_segmentos = np.zeros((num_segmentos, min_segment_length))
+        num_audios = 0
+
+        for archivo in os.listdir(ruta_voz):
+            if archivo.startswith(palabra) and archivo.endswith('.wav'):
+                segmentos, _ = segmentar_audio(os.path.join(ruta_voz, archivo), num_segmentos)
+
+                # Ajustar cada segmento a la longitud mínima
+                for i in range(num_segmentos):
+                    segmento = segmentos[i]
+                    if len(segmento) > min_segment_length:
+                        segmento = segmento[:min_segment_length]
+                    elif len(segmento) < min_segment_length:
+                        segmento = np.pad(segmento, (0, min_segment_length - len(segmento)), mode='constant')
+                    
+                    sum_segmentos[i] += segmento
+                
+                num_audios += 1
+
+        # Calcular el promedio de cada segmento para la palabra actual
+        if num_audios > 0:
+            segmentos_promedio[palabra] = sum_segmentos / num_audios
+
+    # Graficar los segmentos promedio para cada palabra
+    plt.figure(figsize=(12, 10))
+    for i, (palabra, segmentos) in enumerate(segmentos_promedio.items()):
+        for j in range(num_segmentos):
+            plt.subplot(len(palabras), num_segmentos, i * num_segmentos + j + 1)
+            plt.plot(segmentos[j], color='blue')
+            if j == 0:
+                plt.ylabel(f"'{palabra}'")
+            if i == 0:
+                plt.title(f"Segmento {j + 1}")
+            plt.xlabel("Tiempo")
+            plt.xticks([])
+            plt.yticks([])
+
+    plt.tight_layout()
+    plt.show()
 
 
 
@@ -240,6 +303,9 @@ if __name__ == "__main__":
     print("Filtrando características con baja desviación estándar en cada clase...")
     base_datos_voz_filtrado = filtrar_caracteristicas_por_clase(base_datos_voz, etiquetas_voz)
 
+    ruta_voz = 'base_datos_voz/'
+    palabras = ['choclo', 'berenjena', 'zanahoria', 'papa']
+    graficar_onda_segmentada_promedio(ruta_voz, palabras)
     # Paso 3: Entrenar el modelo Knn para reconocimiento de voz
     print("Entrenando Knn para reconocimiento de voz...")
     knn = entrenar_knn(base_datos_voz_filtrado, etiquetas_voz)
